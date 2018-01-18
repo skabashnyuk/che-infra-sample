@@ -17,16 +17,23 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.function.Consumer;
 import javax.inject.Inject;
 import org.eclipse.che.api.core.model.workspace.Warning;
 import org.eclipse.che.api.core.model.workspace.runtime.Machine;
 import org.eclipse.che.api.core.model.workspace.runtime.MachineStatus;
+import org.eclipse.che.api.core.model.workspace.runtime.RuntimeIdentity;
+import org.eclipse.che.api.core.model.workspace.runtime.Server;
 import org.eclipse.che.api.core.model.workspace.runtime.ServerStatus;
 import org.eclipse.che.api.core.notification.EventService;
 import org.eclipse.che.api.workspace.server.DtoConverter;
 import org.eclipse.che.api.workspace.server.URLRewriter;
 import org.eclipse.che.api.workspace.server.hc.ServersChecker;
 import org.eclipse.che.api.workspace.server.hc.ServersCheckerFactory;
+import org.eclipse.che.api.workspace.server.hc.probe.ProbeResult;
+import org.eclipse.che.api.workspace.server.hc.probe.ProbeResult.ProbeStatus;
+import org.eclipse.che.api.workspace.server.hc.probe.ProbeScheduler;
+import org.eclipse.che.api.workspace.server.hc.probe.WorkspaceProbesFactory;
 import org.eclipse.che.api.workspace.server.spi.InfrastructureException;
 import org.eclipse.che.api.workspace.server.spi.InternalInfrastructureException;
 import org.eclipse.che.api.workspace.server.spi.InternalRuntime;
@@ -44,6 +51,8 @@ public class MyInternalRuntime extends InternalRuntime<MyRuntimeContext> {
   private final MyBootstrapperFactory myBootstrapperFactory;
   private final ServersCheckerFactory serverCheckerFactory;
   private final EventService eventService;
+  private final ProbeScheduler probeScheduler;
+  private final WorkspaceProbesFactory probesFactory;
 
   @Inject
   public MyInternalRuntime(
@@ -52,11 +61,15 @@ public class MyInternalRuntime extends InternalRuntime<MyRuntimeContext> {
       URLRewriter urlRewriter,
       MyBootstrapperFactory myBootstrapperFactory,
       ServersCheckerFactory serverCheckerFactory,
-      EventService eventService) {
+      EventService eventService,
+      ProbeScheduler probeScheduler,
+      WorkspaceProbesFactory probesFactory) {
     super(context, urlRewriter, warnings, false);
     this.myBootstrapperFactory = myBootstrapperFactory;
     this.serverCheckerFactory = serverCheckerFactory;
     this.eventService = eventService;
+    this.probeScheduler = probeScheduler;
+    this.probesFactory = probesFactory;
   }
 
   @Override
@@ -100,6 +113,8 @@ public class MyInternalRuntime extends InternalRuntime<MyRuntimeContext> {
       doBootstrap(machineName, machineConfig);
 
       doWaitServersRunning(machineName, machineConfig);
+
+      doScheduleServersLivenessProbes(machineName);
     } catch (Exception e) {
       sendMachineFailedEvent(machineName, e.getMessage());
       throw e;
@@ -128,6 +143,39 @@ public class MyInternalRuntime extends InternalRuntime<MyRuntimeContext> {
     readinessChecker.await();
 
     // or custom infrastructure specific logic can be performed here
+  }
+
+  private void doScheduleServersLivenessProbes(String machineName) throws InfrastructureException {
+    RuntimeIdentity identity = getContext().getIdentity();
+    probeScheduler.schedule(
+        // resolved machine servers should be here instead of empty map
+        probesFactory.getProbes(identity.getWorkspaceId(), machineName, emptyMap()),
+        new ServerLivenessHandler());
+  }
+
+  private class ServerLivenessHandler implements Consumer<ProbeResult> {
+    @Override
+    public void accept(ProbeResult probeResult) {
+      String machineName = probeResult.getMachineName();
+      String serverName = probeResult.getServerName();
+      ProbeStatus probeStatus = probeResult.getStatus();
+      // assign server which has name = serverName to which probe is related instead of null
+      Server server = null;
+      ServerStatus oldServerStatus = server.getStatus();
+      ServerStatus serverStatus;
+
+      if (probeStatus == ProbeStatus.FAILED && oldServerStatus == ServerStatus.RUNNING) {
+        serverStatus = ServerStatus.STOPPED;
+      } else if (probeStatus == ProbeStatus.PASSED && (oldServerStatus != ServerStatus.RUNNING)) {
+        serverStatus = ServerStatus.RUNNING;
+      } else {
+        return;
+      }
+
+      // set new status serverStatus into machine with name machineName
+
+      // send event about changing server status
+    }
   }
 
   private void doBootstrap(String machineName, InternalMachineConfig machineConfig)
