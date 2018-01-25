@@ -13,6 +13,7 @@ package org.eclipse.che.workspace.infrastructure.dummy.env;
 import java.util.List;
 import java.util.Map;
 import javax.inject.Inject;
+import javax.inject.Named;
 import org.eclipse.che.api.core.ValidationException;
 import org.eclipse.che.api.core.model.workspace.Warning;
 import org.eclipse.che.api.installer.server.InstallerRegistry;
@@ -27,12 +28,17 @@ import org.eclipse.che.api.workspace.server.spi.environment.RecipeRetriever;
 public class MyInternalEnvironmentFactory
     extends InternalEnvironmentFactory<MyInternalEnvironment> {
 
+  private final String defaultMachineMemorySizeAttribute;
+
   @Inject
   public MyInternalEnvironmentFactory(
       InstallerRegistry installerRegistry,
       RecipeRetriever recipeRetriever,
-      MachineConfigsValidator machinesValidator) {
+      MachineConfigsValidator machinesValidator,
+      @Named("che.workspace.default_memory_mb") long defaultMachineMemorySizeMB) {
     super(installerRegistry, recipeRetriever, machinesValidator);
+    this.defaultMachineMemorySizeAttribute =
+        String.valueOf(defaultMachineMemorySizeMB * 1024 * 1024);
   }
 
   @Override
@@ -43,7 +49,15 @@ public class MyInternalEnvironmentFactory
     String recipeContext = recipe.getContent();
     // recipe should be parsed here
 
-    return new MyInternalEnvironment( // env specific fields here,
-        recipe, machines, warnings);
+    // Check that all the machines from recipe are in the list of InternalMachineConfig.
+    // If not, add missing machines to normalize state of internal environment configuration.
+
+    // If RAM limit is respected by environment
+    //     If RAM limit is not set in InternalMachineConfig and is set in recipe
+    //       put limit from recipe to InternalMachineConfig attribute
+    //       MachineConfig#MEMORY_LIMIT_ATTRIBUTE
+    //     Otherwise put attribute with limit from defaultMachineMemorySizeAttribute
+
+    return new MyInternalEnvironment(/* env specific fields here,*/ recipe, machines, warnings);
   }
 }
